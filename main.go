@@ -1,10 +1,11 @@
 package main
 
 import (
+	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"net/http/httputil"
-	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -34,16 +35,10 @@ type Proxy struct {
 	wsProxy   *WebsocketReverseProxy
 }
 
-func readMessage(conn *websocket.Conn, msg chan<- string, mt, exit chan<- int) {
-	for {
-		_mt, _msg, err := conn.ReadMessage()
-		if err != nil {
-			log.Printf("read message error:%v", err)
-			exit <- 1
-			return
-		}
-		msg <- string(_msg)
-		mt <- _mt
+func readMessage(writer io.Writer, reader io.Reader, errChan chan<- error) {
+	_, err := io.Copy(writer, reader)
+	if err != nil {
+		errChan <- err
 	}
 }
 
@@ -62,53 +57,31 @@ func (this *WebsocketReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Requ
 	defer connReq.Close()
 
 	this.Director(r)
+
 	if r.Host == "" {
 		this.logger.Print("host invalid")
 		w.Write([]byte("host invalid"))
 		return
 	}
-	u := url.URL{Scheme: r.URL.Scheme, Host: r.Host, Path: r.URL.Path}
+	u := r.URL
 
-	connRes, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	header := make(http.Header)
+	header.Set("Cookie", r.Header.Get("Cookie"))
+	connRes, wsres, err := websocket.DefaultDialer.Dial(u.String(), header)
 	if err != nil {
-		this.logger.Print("dial:", err)
+		body, _ := ioutil.ReadAll(wsres.Body)
+		this.logger.Print("dial:", u.String(), err, string(body))
 		return
 	}
 	defer connRes.Close()
 
-	exitReq := make(chan int, 1)
-	exitRes := make(chan int, 1)
+	exit := make(chan error, 1)
 
-	mtReq := make(chan int, 1)
-	mtRes := make(chan int, 1)
+	go readMessage(connReq.UnderlyingConn(), connRes.UnderlyingConn(), exit)
+	go readMessage(connRes.UnderlyingConn(), connReq.UnderlyingConn(), exit)
 
-	msgReq := make(chan string, 1)
-	msgRes := make(chan string, 1)
-
-	go readMessage(connReq, msgReq, mtReq, exitReq)
-	go readMessage(connRes, msgRes, mtRes, exitRes)
-
-	for {
-		select {
-		case <-exitRes:
-			goto Exit
-		case <-exitReq:
-			goto Exit
-		case mReq := <-msgReq:
-			if err := connRes.WriteMessage(<-mtReq, []byte(mReq)); err != nil {
-				this.logger.Printf("write message error:%v", err)
-				goto Exit
-			}
-		case mRes := <-msgRes:
-			if err := connReq.WriteMessage(<-mtRes, []byte(mRes)); err != nil {
-				this.logger.Printf("write message error:%v", err)
-				goto Exit
-			}
-		}
-	}
-
-Exit:
-	log.Print(r.RequestURI, " closed>>>>>>>>>>")
+	err = <-exit
+	this.logger.Print("closed>>>>>>>>>>", err)
 
 }
 
@@ -135,9 +108,13 @@ func (this *Proxy) reset() {
 	this.hm = hm
 
 	director := func(r *http.Request) {
-		r.URL.Scheme = r.URL.Scheme
+		if websocket.IsWebSocketUpgrade(r) {
+			r.URL.Scheme = "ws"
+		} else {
+			r.URL.Scheme = "http"
+		}
 		r.URL.Host = hm[r.Host]
-		r.URL.RawQuery = r.RequestURI
+		//r.URL.RawQuery = r.RequestURI
 	}
 
 	this.httpProxy = &httputil.ReverseProxy{Director: director, ErrorLog: this.logger}
@@ -167,4 +144,5 @@ func main() {
 
 	pro.reset()
 	log.Fatal(http.ListenAndServeTLS(ADDR, CERT_FILE, KEY_FILE, pro))
+	//log.Fatal(http.ListenAndServe(":1280", pro))
 }
