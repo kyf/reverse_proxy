@@ -24,7 +24,7 @@ var (
 	ROOT_DIR    = os.Getenv("ROOT_DIR")
 	CERT_FILE   = ROOT_DIR + "/cert/molu.crt"
 	KEY_FILE    = ROOT_DIR + "/cert/molu.key"
-	CONFIG_PATH = ROOT_DIR + "/conf/proxy.conf"
+	CONFIG_PATH = ROOT_DIR + "/conf/proxy.ini"
 )
 
 type Proxy struct {
@@ -62,6 +62,11 @@ func (this *WebsocketReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Requ
 	defer connReq.Close()
 
 	this.Director(r)
+	if r.Host == "" {
+		this.logger.Print("host invalid")
+		w.Write([]byte("host invalid"))
+		return
+	}
 	u := url.URL{Scheme: r.URL.Scheme, Host: r.Host, Path: r.URL.Path}
 
 	connRes, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
@@ -130,13 +135,8 @@ func (this *Proxy) reset() {
 	this.hm = hm
 
 	director := func(r *http.Request) {
-		item, err := url.Parse(hm[r.Host])
-		if err != nil {
-			this.logger.Print(err)
-			return
-		}
-		r.URL.Scheme = item.Scheme
-		r.URL.Host = item.Host
+		r.URL.Scheme = r.URL.Scheme
+		r.URL.Host = hm[r.Host]
 		r.URL.RawQuery = r.RequestURI
 	}
 
