@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"github.com/Unknwon/goconfig"
@@ -109,9 +108,8 @@ Exit:
 }
 
 func (this *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	upgrade := r.Header.Get("Upgrade")
-	if strings.EqualFold("websocket", upgrade) {
-		go this.wsProxy.ServeHTTP(w, r)
+	if websocket.IsWebSocketUpgrade(r) {
+		this.wsProxy.ServeHTTP(w, r)
 	} else {
 		this.httpProxy.ServeHTTP(w, r)
 	}
@@ -132,8 +130,13 @@ func (this *Proxy) reset() {
 	this.hm = hm
 
 	director := func(r *http.Request) {
-		r.URL.Scheme = hm[r.Host]["scheme"]
-		r.URL.Host = hm[r.Host]["host"]
+		item, err := url.Parse(hm[r.Host])
+		if err != nil {
+			this.logger.Print(err)
+			return
+		}
+		r.URL.Scheme = item.Scheme
+		r.URL.Host = item.Host
 		r.URL.RawQuery = r.RequestURI
 	}
 
