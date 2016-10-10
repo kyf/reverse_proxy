@@ -113,8 +113,11 @@ func (this *Proxy) reset() {
 		} else {
 			r.URL.Scheme = "http"
 		}
-		r.URL.Host = hm[r.Host]
-		//r.URL.RawQuery = r.RequestURI
+		var ok bool
+		r.URL.Host, ok = hm[r.Host]
+		if !ok {
+			r.URL.Host = hm["www.error.com"]
+		}
 	}
 
 	this.httpProxy = &httputil.ReverseProxy{Director: director, ErrorLog: this.logger}
